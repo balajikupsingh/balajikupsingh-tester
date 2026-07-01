@@ -1,0 +1,163 @@
+name: tester-suite
+
+# This workflow is the thing that actually gates merges. It's designed to be
+# called two ways:
+#   1. directly, on push/PR to this tester repo (so changes to the tests
+#      themselves are validated), and
+#   2. as a reusable workflow (`workflow_call`), invoked by the FE and BE
+#      app repos' own CI so a PR over there can require "tester-suite" as a
+#      required status check. See README.md > "Gating a developer's PR" for
+#      the concrete wiring.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+    inputs:
+      app_repo:
+        description: "owner/repo of the FE or BE repo whose PR triggered this run"
+        required: false
+        type: string
+      app_ref:
+        description: "git ref in that repo to check out and test against"
+        required: false
+        type: string
+
+jobs:
+  api-tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: node_express_sequelize_realworld_user
+          POSTGRES_PASSWORD: a
+          POSTGRES_DB: node_express_sequelize_realworld
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U node_express_sequelize_realworld_user"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Checks out the backend under test. In real use this would check out
+      # ${{ inputs.app_repo }}@${{ inputs.app_ref }} (the PR branch) instead
+      # of a pinned fork - pinned here only because this exercise uses one
+      # fixed reference app rather than a live team repo.
+      - name: Checkout backend under test
+        uses: actions/checkout@v4
+        with:
+          repository: cirosantilli/node-express-sequelize-realworld-example-app
+          path: backend-app
+
+      - name: Install backend deps
+        working-directory: backend-app
+        run: npm install --omit=dev --ignore-scripts
+
+      - name: Start backend
+        working-directory: backend-app
+        env:
+          DATABASE_URL: postgres://node_express_sequelize_realworld_user:a@localhost:5432/node_express_sequelize_realworld
+          PGSSL: "false"
+          PORT: "3000"
+          SECRET: ci-secret
+          NODE_ENV: production
+        run: |
+          node app.js &
+          npx wait-on http://localhost:3000/api/tags --timeout 30000
+
+      - name: Install tester deps
+        run: npm install
+
+      - name: Run API tests
+        env:
+          BASE_URL_API: http://localhost:3000
+        run: npx playwright test tests/api --project=api
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-api
+          path: playwright-report/
+          retention-days: 14
+
+  e2e-tests:
+    runs-on: ubuntu-latest
+    needs: api-tests
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: node_express_sequelize_realworld_user
+          POSTGRES_PASSWORD: a
+          POSTGRES_DB: node_express_sequelize_realworld
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U node_express_sequelize_realworld_user"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Checkout backend under test
+        uses: actions/checkout@v4
+        with:
+          repository: cirosantilli/node-express-sequelize-realworld-example-app
+          path: backend-app
+
+      - name: Checkout frontend under test
+        uses: actions/checkout@v4
+        with:
+          repository: gothinkster/react-redux-realworld-example-app
+          path: frontend-app
+
+      - name: Install + start backend
+        working-directory: backend-app
+        env:
+          DATABASE_URL: postgres://node_express_sequelize_realworld_user:a@localhost:5432/node_express_sequelize_realworld
+          PGSSL: "false"
+          PORT: "3000"
+          SECRET: ci-secret
+          NODE_ENV: production
+        run: |
+          npm install --omit=dev --ignore-scripts
+          node app.js &
+          npx wait-on http://localhost:3000/api/tags --timeout 30000
+
+      - name: Install + start frontend
+        working-directory: frontend-app
+        run: |
+          npm install
+          npm start &
+          npx wait-on http://localhost:4100 --timeout 60000
+
+      - name: Install tester deps + Playwright browsers
+        run: |
+          npm install
+          npx playwright install --with-deps chromium
+
+      - name: Run E2E tests
+        env:
+          BASE_URL_API: http://localhost:3000
+          BASE_URL_WEB: http://localhost:4100
+        run: npx playwright test tests/e2e --project=e2e-chromium
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-e2e
+          path: playwright-report/
+          retention-days: 14

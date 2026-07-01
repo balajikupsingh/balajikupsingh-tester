@@ -1,0 +1,6 @@
+# Any change to the test suite itself, the CI workflow, or the agent needs
+# the automation engineer's review - this is the "guardrail for the
+# guardrail." App code isn't in this repo, so there's nothing else to own.
+/tests/            @bala-qa-handle
+/agent/            @bala-qa-handle
+/.github/workflows @bala-qa-handle
