@@ -142,8 +142,11 @@ jobs:
 
       - name: Install + start frontend
         working-directory: frontend-app
+        env:
+          REACT_APP_API_ROOT: http://localhost:3000/api
         run: |
           npm install
+          node ../ci/patch-frontend-api-root.js src/agent.js
           npm start &
           npx wait-on http://localhost:4100 --timeout 60000
 
