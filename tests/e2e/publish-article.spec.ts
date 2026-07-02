@@ -44,9 +44,18 @@ test('registering, logging in, and publishing an article shows it on the article
   await page.getByPlaceholder('Password').fill(user.password);
   await page.getByRole('button', { name: 'Sign in' }).click();
 
+  // Header.js only renders the "New Post" link once currentUser is set
+  // (LoggedInView vs LoggedOutView) - waiting for it, and navigating via it,
+  // avoids a race where we'd hit /editor before the auth token is actually
+  // stored (which would make the article-create call fail silently and
+  // never redirect - the exact failure this replaces).
+  const newPostLink = page.getByRole('link', { name: 'New Post' });
+  await expect(newPostLink).toBeVisible({ timeout: 10_000 });
+
   // Publish an article through the real Editor form.
   const title = `E2E published article ${id}`;
-  await page.goto('/editor');
+  await newPostLink.click();
+  await expect(page).toHaveURL(/\/editor/);
   await page.getByPlaceholder('Article Title').fill(title);
   await page.getByPlaceholder("What's this article about?").fill('Grounded E2E test');
   await page.getByPlaceholder('Write your article (in markdown)').fill('Body written by the E2E test.');
